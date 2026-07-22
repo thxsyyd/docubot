@@ -24,6 +24,8 @@ class DocuBot:
 
         # Build a retrieval index (implemented in Phase 1)
         self.index = self.build_index(self.documents)
+
+        # Build paragraph-level chunks (Phase 2)
         self.chunks = self.build_chunks(self.documents)
 
     # -----------------------------------------------------------
@@ -44,6 +46,25 @@ class DocuBot:
                 filename = os.path.basename(path)
                 docs.append((filename, text))
         return docs
+
+    # -----------------------------------------------------------
+    # Chunking (Phase 2)
+    # -----------------------------------------------------------
+
+    def build_chunks(self, documents):
+        """
+        Split each document into paragraph-level chunks.
+        Returns a list of (filename, chunk_id, chunk_text) tuples.
+        Empty paragraphs are skipped.
+        """
+        chunks = []
+        for filename, text in documents:
+            paragraphs = text.split("\n\n")
+            for i, para in enumerate(paragraphs):
+                para = para.strip()
+                if para:
+                    chunks.append((filename, i, para))
+        return chunks
 
     # -----------------------------------------------------------
     # Index Construction (Phase 1)
@@ -99,45 +120,32 @@ class DocuBot:
 
         return score
 
-    def retrieve(self, query, top_k=3):
+    def retrieve(self, query, top_k=3, min_score=3):
         """
-        TODO (Phase 1):
-        Use the index and scoring function to select top_k relevant document snippets.
+        Retrieve the top_k most relevant paragraph chunks whose score is at
+        least min_score. Returns a list of (filename, chunk_text) tuples.
 
-        Return a list of (filename, text) sorted by score descending.
+        If no chunk scores >= min_score, returns an empty list so the caller
+        can respond with "I do not know."
         """
-
-        # TODO: implement retrieval logic
-
-        # 1. 从 index 里找出所有"query 词出现过的文档"
-        query_words = query.lower().split()
-        candidate_files = set()
-        for word in query_words:
-            if word in self.index:
-                for filename in self.index[word]:
-                    candidate_files.add(filename)
-    
-        # 2. 对候选文档打分
         scored = []
-        for filename, text in self.documents:
-            if filename in candidate_files:
-                score = self.score_document(query, text)
-                scored.append((score, filename, text))
-    
-        # 3. 按分数降序排列
+        for filename, chunk_id, chunk_text in self.chunks:
+            score = self.score_document(query, chunk_text)
+            if score >= min_score:
+                scored.append((score, filename, chunk_text))
+
         scored.sort(reverse=True)
-    
-        # 4. 返回前 top_k 个 (filename, text)
+
         results = []
-        for score, filename, text in scored[:top_k]:
-            results.append((filename, text))
+        for score, filename, chunk_text in scored[:top_k]:
+            results.append((filename, chunk_text))
         return results
 
     # -----------------------------------------------------------
     # Answering Modes
     # -----------------------------------------------------------
 
-    def answer_retrieval_only(self, query, top_k=3):
+    def answer_retrieval_only(self, query, top_k=5):
         """
         Phase 1 retrieval only mode.
         Returns raw snippets and filenames with no LLM involved.
