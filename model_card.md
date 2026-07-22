@@ -1,147 +1,129 @@
 # DocuBot Model Card
 
-This model card is a short reflection on your DocuBot system. Fill it out after you have implemented retrieval and experimented with all three modes:
+This model card is a short reflection on the DocuBot system, completed after implementing retrieval and experimenting with all three modes:
 
-1. Naive LLM over full docs  
-2. Retrieval only  
+1. Naive LLM over full docs
+2. Retrieval only
 3. RAG (retrieval plus LLM)
-
-Use clear, honest descriptions. It is fine if your system is imperfect.
 
 ---
 
 ## 1. System Overview
 
-**What is DocuBot trying to do?**  
-Describe the overall goal in 2 to 3 sentences.
+**What is DocuBot trying to do?**
 
-> _Your answer here._
+DocuBot is a lightweight documentation assistant. It answers developer questions about a specific codebase by searching a local `docs/` folder for relevant text and (in RAG mode) using an LLM to turn the retrieved text into a grounded answer. The goal is to answer questions using the project's own documentation instead of the model's generic training knowledge.
 
-**What inputs does DocuBot take?**  
-For example: user question, docs in folder, environment variables.
+**What inputs does DocuBot take?**
 
-> _Your answer here._
+- A developer's natural-language question (e.g., "Where is the auth token generated?")
+- A folder of Markdown documentation files (`docs/*.md`)
+- The `GEMINI_API_KEY` environment variable (only needed for the two LLM-backed modes)
 
 **What outputs does DocuBot produce?**
 
-> _Your answer here._
+- In retrieval-only mode: the most relevant document snippets, shown verbatim with their filenames.
+- In RAG mode: a short natural-language answer grounded in the retrieved snippets, plus a note about which files were used, or an explicit "I do not know based on the docs I have."
 
 ---
 
 ## 2. Retrieval Design
 
-**How does your retrieval system work?**  
-Describe your choices for indexing and scoring.
+**How does your retrieval system work?**
 
-- How do you turn documents into an index?
-- How do you score relevance for a query?
-- How do you choose top snippets?
+- **Chunking:** Each document is split into paragraph-level chunks on blank lines (`\n\n`). This produced 163 chunks across the four docs, so retrieval returns small focused snippets (roughly 100–300 characters) instead of whole files.
+- **Indexing:** An inverted index maps each lowercased word to the list of files it appears in. (In the final version, scoring runs directly over chunks, so the index mainly serves as a quick lookup of which words exist at all.)
+- **Scoring:** For a query, I lowercase it, strip punctuation, drop common stop words (the, is, how, in, ...), and count how many times each remaining meaningful word appears in a chunk. That count is the chunk's score.
+- **Selecting snippets:** Chunks scoring at or above `min_score` (default 1) are sorted by score descending, and the top `k` (default 3) are returned.
 
-> _Your answer here._
+**What tradeoffs did you make?**
 
-**What tradeoffs did you make?**  
-For example: speed vs precision, simplicity vs accuracy.
-
-> _Your answer here._
+- **Simplicity vs. accuracy:** Keyword counting is easy to understand and debug, but it has no sense of meaning. Adding stop-word filtering was the single biggest quality improvement — before it, long paragraphs full of "the/is/token" beat short paragraphs that actually contained the answer.
+- **Precision vs. recall in the threshold:** No single `min_score` works for every query. A threshold high enough to reject the "payment" question also rejects real questions whose best chunk only scores 1. I chose a low threshold and let the LLM make the final judgment, trading some precision for recall.
 
 ---
 
 ## 3. Use of the LLM (Gemini)
 
-**When does DocuBot call the LLM and when does it not?**  
-Briefly describe how each mode behaves.
+**When does DocuBot call the LLM and when does it not?**
 
-- Naive LLM mode:
-- Retrieval only mode:
-- RAG mode:
+- **Naive LLM mode:** Calls Gemini, but (by design in the starter) the prompt ignores the docs entirely and just asks the question. Baseline for "no retrieval."
+- **Retrieval only mode:** Never calls the LLM. Returns raw snippets from my scoring/ranking logic.
+- **RAG mode:** First runs my retrieval to get the top snippets, then calls Gemini with those snippets as the only allowed source.
 
-> _Your answer here._
+**What instructions do you give the LLM to keep it grounded?**
 
-**What instructions do you give the LLM to keep it grounded?**  
-Summarize the rules from your prompt. For example: only use snippets, say "I do not know" when needed, cite files.
-
-> _Your answer here._
+The RAG prompt tells Gemini to answer using only the provided snippets, to never invent functions/endpoints/config values, to reply with the exact phrase "I do not know based on the docs I have." when the snippets are insufficient, and to briefly name the files it relied on.
 
 ---
 
 ## 4. Experiments and Comparisons
 
-Run the **same set of queries** in all three modes. Fill in the table with short notes.
+Same queries run across all three modes:
 
-You can reuse or adapt the queries from `dataset.py`.
+| Query | Naive LLM | Retrieval only | RAG | Notes |
+|------|-----------|----------------|-----|-------|
+| Where is the auth token generated? | Harmful — confident generic advice ("look for AuthController, jwt.sign()"), never mentions the real answer | Helpful — returns the AUTH.md paragraph containing `generate_access_token` | **Helpful** — "generated by `generate_access_token` in `auth_utils.py`", cites AUTH.md | RAG is clearly best: accurate + concise + sourced |
+| How do I connect to the database? | Harmful — generic connection-string tutorial, not this project | Helpful — returns DATABASE.md / SETUP.md snippets | **Helpful** — explains `DATABASE_URL`, SQLite default, PostgreSQL note | RAG correctly blends two files |
+| Which endpoint lists all users? | Harmful — invents `/users`, `/api/v1/users` variations | Mixed — returns an intro paragraph, not the real `GET /api/users` section | Refused ("I do not know") | RAG **retrieval miss**: the answer exists in the docs but my scorer picked the wrong chunk |
+| How does a client refresh an access token? | Fluent generic OAuth flow, not grounded in these docs | Mixed — snippets are auth-related but not the refresh step | Refused ("I do not know") | Another retrieval miss; the correct `/api/refresh` step scored too low |
+| Is there any mention of payment processing? | Asked user to paste docs (no docs in prompt) | Harmful — returned unrelated chunks via stop-word noise | **Correctly refused** | RAG's best behavior: no payment content exists, so it declines |
 
-| Query | Naive LLM: helpful or harmful? | Retrieval only: helpful or harmful? | RAG: helpful or harmful? | Notes |
-|------|---------------------------------|--------------------------------------|---------------------------|-------|
-| Example: Where is the auth token generated? | | | | |
-| Example: How do I connect to the database? | | | | |
-| Example: Which endpoint lists all users? | | | | |
-| Example: How does a client refresh an access token? | | | | |
+**What patterns did you notice?**
 
-**What patterns did you notice?**  
-
-- When does naive LLM look impressive but untrustworthy?  
-- When is retrieval only clearly better?  
-- When is RAG clearly better than both?
-
-> _Your answer here._
+- **Naive LLM looks impressive but is untrustworthy** on every project-specific question — it produces fluent, well-formatted answers that are entirely generic and sometimes invented.
+- **Retrieval only is more trustworthy** (it can't hallucinate) but dumps raw text and, when the scorer picks a weak chunk, gives the user no usable answer.
+- **RAG is clearly best when retrieval succeeds** (auth token, database): accurate, concise, and sourced. It is also **safest on unanswerable questions** (payment) because the LLM double-checks the context and refuses. Its weakness is inherited from retrieval: when my keyword scorer misses the right chunk, RAG refuses even though the answer exists.
 
 ---
 
 ## 5. Failure Cases and Guardrails
 
-**Describe at least two concrete failure cases you observed.**  
-For each one, say:
+**Failure case 1 — Retrieval miss (false negative):**
+- Question: "Which endpoint lists all users?"
+- What happened: The answer (`GET /api/users`, admin only) exists in API_REFERENCE.md, but my keyword scorer ranked a generic intro paragraph higher, so the real section was never sent to Gemini, which then refused.
+- What should have happened: The `/api/users` section should have been retrieved and summarized.
 
-- What was the question?  
-- What did the system do?  
-- What should have happened instead?
+**Failure case 2 — Stop-word noise (false positive):**
+- Question: "Is there any mention of payment processing in these docs?"
+- What happened (before the stop-word fix): every document scored non-zero purely from words like "is / there / any / in / these", so retrieval returned three unrelated chunks with apparent confidence.
+- What should have happened: no chunk should match, and the system should decline — which it now does once stop words are removed and the LLM reviews the context.
 
-> _Failure case 1 here._
+**When should DocuBot say "I do not know based on the docs I have"?**
+- When no retrieved chunk actually contains information relevant to the question (e.g., the payment question).
+- When the only chunks that pass the score threshold are off-topic, so answering would require guessing beyond the provided text.
 
-> _Failure case 2 here._
-
-**When should DocuBot say “I do not know based on the docs I have”?**  
-Give at least two specific situations.
-
-> _Your answer here._
-
-**What guardrails did you implement?**  
-Examples: refusal rules, thresholds, limits on snippets, safe defaults.
-
-> _Your answer here._
+**What guardrails did you implement?**
+- A `min_score` threshold in `retrieve`, so chunks with no meaningful keyword overlap are dropped and an empty result becomes an automatic "I do not know."
+- Stop-word filtering in scoring, so trivial words can't manufacture false relevance.
+- A strict RAG prompt that forbids inventing details and requires an explicit refusal phrase when evidence is missing.
 
 ---
 
 ## 6. Limitations and Future Improvements
 
-**Current limitations**  
-List at least three limitations of your DocuBot system.
+**Current limitations**
 
-1. _Limitation 1_
-2. _Limitation 2_
-3. _Limitation 3_
+1. **Keyword matching has no sense of meaning.** A question phrased differently from the docs ("list users" vs. "returns all users") can miss the right chunk entirely.
+2. **No single score threshold is correct.** The threshold that blocks the unanswerable payment question also blocks real questions whose best chunk scores just as low, so relevance and refusal can't both be tuned perfectly.
+3. **Substring matching is crude.** `count("auth")` also matches "author," and singular/plural forms ("endpoint" vs "endpoints") are treated as different words.
 
-**Future improvements**  
-List two or three changes that would most improve reliability or usefulness.
+**Future improvements**
 
-1. _Improvement 1_
-2. _Improvement 2_
-3. _Improvement 3_
+1. **Use embeddings / semantic search** instead of keyword counting, so meaning — not exact words — drives retrieval. This directly fixes the "list users" vs "returns all users" miss.
+2. **Score normalization by chunk length**, so long paragraphs don't win just for being long, and add light stemming so plural/singular forms match.
+3. **Return a confidence signal** alongside snippets, so the UI can distinguish "confident answer," "low-confidence answer," and "no answer" instead of a hard refuse/answer switch.
 
 ---
 
 ## 7. Responsible Use
 
-**Where could this system cause real world harm if used carelessly?**  
-Think about wrong answers, missing information, or over trusting the LLM.
+**Where could this system cause real world harm if used carelessly?**
 
-> _Your answer here._
+If a developer trusts DocuBot's answer without checking the source, a retrieval miss could make them believe documented behavior doesn't exist (e.g., concluding there's no "list all users" endpoint when there is), leading to duplicated or incorrect work. In naive mode the risk is worse: the model invents plausible endpoints and config values that don't exist in the codebase, and a hurried developer could implement against them.
 
-**What instructions would you give real developers who want to use DocuBot safely?**  
-Write 2 to 4 short bullet points.
+**What instructions would you give real developers who want to use DocuBot safely?**
 
-- _Guideline 1_
-- _Guideline 2_
-- _Guideline 3 (optional)_
-
----
+- Treat answers as pointers, not final truth — always open the cited file to confirm.
+- Trust a confident answer less when no file is cited, and treat "I do not know" as "search manually," not "it doesn't exist."
+- Never use naive (no-retrieval) mode for project-specific facts; only trust answers that name their source files.

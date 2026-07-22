@@ -11,6 +11,16 @@ import os
 import glob
 
 class DocuBot:
+    # Common English words that carry little meaning for keyword matching.
+    # Skipping them stops noisy words like "the" or "is" from inflating scores.
+    STOP_WORDS = {
+        "a", "an", "and", "are", "as", "at", "be", "by", "do", "does",
+        "for", "from", "how", "i", "in", "is", "it", "of", "on", "or",
+        "that", "the", "there", "these", "this", "to", "was", "what",
+        "when", "where", "which", "who", "why", "with", "you", "your",
+        "any", "mention", "me", "my", "can", "will", "would", "should",
+    }
+
     def __init__(self, docs_folder="docs", llm_client=None):
         """
         docs_folder: directory containing project documentation files
@@ -102,25 +112,28 @@ class DocuBot:
 
     def score_document(self, query, text):
         """
-        TODO (Phase 1):
         Return a simple relevance score for how well the text matches the query.
 
-        Suggested baseline:
+        Baseline:
         - Convert query into lowercase words
-        - Count how many appear in the text
-        - Return the count as the score
+        - Skip common stop words (the, is, how, ...) so they don't inflate scores
+        - Count how many meaningful query words appear in the text
+        - Return the total count as the score
         """
-        # TODO: implement scoring
         query_words = query.lower().split()
         text_lower = text.lower()
 
         score = 0
         for word in query_words:
-            score += text_lower.count(word)
+            # Strip surrounding punctuation from the query word
+            clean_word = word.strip("?.,!:;()<>/")
+            if not clean_word or clean_word in self.STOP_WORDS:
+                continue
+            score += text_lower.count(clean_word)
 
         return score
 
-    def retrieve(self, query, top_k=3, min_score=3):
+    def retrieve(self, query, top_k=3, min_score=1):
         """
         Retrieve the top_k most relevant paragraph chunks whose score is at
         least min_score. Returns a list of (filename, chunk_text) tuples.
