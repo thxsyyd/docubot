@@ -24,6 +24,7 @@ class DocuBot:
 
         # Build a retrieval index (implemented in Phase 1)
         self.index = self.build_index(self.documents)
+        self.chunks = self.build_chunks(self.documents)
 
     # -----------------------------------------------------------
     # Document Loading
@@ -65,6 +66,13 @@ class DocuBot:
         """
         index = {}
         # TODO: implement simple indexing
+        for filename, text in documents:
+            words = text.lower().split()
+            for word in words:
+                if word not in index:
+                    index[word] = []
+                if filename not in index[word]:
+                    index[word].append(filename)
         return index
 
     # -----------------------------------------------------------
@@ -82,7 +90,14 @@ class DocuBot:
         - Return the count as the score
         """
         # TODO: implement scoring
-        return 0
+        query_words = query.lower().split()
+        text_lower = text.lower()
+
+        score = 0
+        for word in query_words:
+            score += text_lower.count(word)
+
+        return score
 
     def retrieve(self, query, top_k=3):
         """
@@ -91,9 +106,32 @@ class DocuBot:
 
         Return a list of (filename, text) sorted by score descending.
         """
-        results = []
+
         # TODO: implement retrieval logic
-        return results[:top_k]
+
+        # 1. 从 index 里找出所有"query 词出现过的文档"
+        query_words = query.lower().split()
+        candidate_files = set()
+        for word in query_words:
+            if word in self.index:
+                for filename in self.index[word]:
+                    candidate_files.add(filename)
+    
+        # 2. 对候选文档打分
+        scored = []
+        for filename, text in self.documents:
+            if filename in candidate_files:
+                score = self.score_document(query, text)
+                scored.append((score, filename, text))
+    
+        # 3. 按分数降序排列
+        scored.sort(reverse=True)
+    
+        # 4. 返回前 top_k 个 (filename, text)
+        results = []
+        for score, filename, text in scored[:top_k]:
+            results.append((filename, text))
+        return results
 
     # -----------------------------------------------------------
     # Answering Modes
